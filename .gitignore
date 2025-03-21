@@ -1,0 +1,38 @@
+# Word documents (article drafts — not part of the codebase)
+*.docx
+~$*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model weights (too large for git)
+models/
+*.bin
+*.safetensors
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
