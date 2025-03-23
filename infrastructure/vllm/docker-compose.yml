@@ -1,0 +1,79 @@
+# infrastructure/vllm/docker-compose.yml
+# Self-hosted inference stack:
+#   vLLM → serves Mistral 7B fine-tuned model on GPU
+#   LiteLLM → OpenAI-compatible proxy with routing, auth, and logging
+#
+# Prerequisites:
+#   - NVIDIA GPU with CUDA 12.x
+#   - nvidia-container-toolkit installed
+#   - HuggingFace token for model download
+#   - Fine-tuned model weights in ./models/mistral-7b-finetuned-credit/
+
+version: "3.9"
+
+services:
+
+  # ── vLLM inference server ──────────────────────────────────────────────────
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-mistral
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+    volumes:
+      - ./models:/models                        # Mount fine-tuned model weights
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    command: >
+      --model /models/mistral-7b-finetuned-credit
+      --served-model-name mistral-7b-finetuned-credit
+      --max-model-len 8192
+      --gpu-memory-utilization 0.90
+      --dtype bfloat16
+      --quantization awq
+      --tensor-parallel-size 1
+      --port 8000
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s       # vLLM model load takes ~2min on A100
+
+  # ── LiteLLM proxy ─────────────────────────────────────────────────────────
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm-proxy
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
+    command: >
+      --config /app/config.yaml
+      --port 4000
+      --detailed_debug
+    ports:
+      - "4000:4000"
+    depends_on:
+      vllm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  models:

@@ -1,0 +1,58 @@
+# infrastructure/vllm/litellm_config.yaml
+# LiteLLM proxy routing configuration.
+# Presents a single OpenAI-compatible API endpoint to the LangGraph orchestrator.
+# Routing rules determine whether a request goes to vLLM, Bedrock, or fallback.
+
+model_list:
+
+  # ── On-premises vLLM (fine-tuned Mistral 7B) ────────────────────────────
+  - model_name: mistral-7b-finetuned-credit
+    litellm_params:
+      model: openai/mistral-7b-finetuned-credit   # openai/ prefix = OpenAI-compatible
+      api_base: http://vllm:8000/v1
+      api_key: "not-used"
+      timeout: 60
+      max_retries: 2
+
+  # ── AWS Bedrock Claude (Sonnet — classification & routing agents) ────────
+  - model_name: claude-3-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_region_name: us-east-1
+      timeout: 30
+      max_retries: 3
+
+  # ── AWS Bedrock Claude (Haiku — ingestion agent, cost-optimised) ─────────
+  - model_name: claude-3-haiku
+    litellm_params:
+      model: bedrock/anthropic.claude-3-haiku-20240307-v1:0
+      aws_region_name: us-east-1
+      timeout: 30
+      max_retries: 3
+
+  # ── Fallback: local Ollama (air-gapped environments without GPU) ──────────
+  - model_name: mistral-7b-fallback
+    litellm_params:
+      model: ollama/mistral
+      api_base: http://host.docker.internal:11434
+      timeout: 120
+
+router_settings:
+  routing_strategy: least-busy          # Load balance across healthy backends
+  num_retries: 3
+  retry_after: 5
+  allowed_fails: 2
+  cooldown_time: 30
+
+litellm_settings:
+  drop_params: true                     # Drop unsupported params silently
+  request_timeout: 120
+  telemetry: false                      # Disable telemetry in regulated environments
+
+  # ── Logging ────────────────────────────────────────────────────────────────
+  success_callback: ["langfuse"]        # Trace all successful calls
+  failure_callback: ["langfuse"]        # Trace failures for debugging
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: null                    # Set to PostgreSQL URI for persistent logging
