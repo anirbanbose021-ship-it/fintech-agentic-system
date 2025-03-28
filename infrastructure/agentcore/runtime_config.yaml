@@ -1,0 +1,66 @@
+# AWS Bedrock AgentCore Runtime definition
+# Deploys the LangGraph pipeline as a managed agentic workload
+
+runtime:
+  name: fintech-doc-intelligence
+  description: Multi-agent document intelligence pipeline for financial services
+  version: "1.0.0"
+
+  container:
+    image: ${ECR_REPO}/fintech-agentic-system:latest
+    port: 8080
+    health_check:
+      path: /health
+      interval_seconds: 30
+      timeout_seconds: 10
+    environment:
+      - name: LITELLM_PROXY_URL
+        value: http://litellm-proxy:4000
+      - name: DYNAMODB_TABLE
+        value_from_secret: pipeline-audit-log
+      - name: AWS_DEFAULT_REGION
+        value: us-east-1
+
+  compute:
+    instance_type: ml.m5.xlarge
+    min_instances: 1
+    max_instances: 4
+    scaling:
+      metric: request_count
+      target_value: 50
+      cooldown_seconds: 120
+
+  iam_role: arn:aws:iam::${ACCOUNT_ID}:role/AgentCoreRuntimeRole
+
+  # model access — runtime needs invoke permissions for these
+  bedrock_models:
+    - anthropic.claude-3-sonnet-20240229-v1:0
+    - anthropic.claude-3-haiku-20240307-v1:0
+    - amazon.titan-embed-text-v2:0
+
+  tools:
+    - name: dynamodb
+      type: aws_service
+      config:
+        table_name: pipeline-audit-log
+        operations: [PutItem, GetItem, Query]
+    - name: s3
+      type: aws_service
+      config:
+        bucket: ${DOCUMENT_BUCKET}
+        operations: [GetObject, PutObject]
+    - name: sns
+      type: aws_service
+      config:
+        topic_arn: arn:aws:sns:us-east-1:${ACCOUNT_ID}:ml-deployment-alerts
+
+  observability:
+    cloudwatch:
+      log_group: /agentcore/fintech-doc-intelligence
+      trace_sampling_rate: 1.0   # 100% tracing in regulated env — no sampling
+    metrics:
+      namespace: FintechAgenticSystem
+      dimensions:
+        - agent_name
+        - document_type
+        - routing_decision

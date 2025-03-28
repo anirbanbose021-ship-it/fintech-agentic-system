@@ -1,0 +1,40 @@
+# AgentCore Memory scoping policy
+# CRITICAL: memory must be scoped to (document_id, client_id) to prevent
+# cross-client contamination. Learned this the hard way in load testing —
+# Decision Router for client A was picking up artifacts from client B.
+
+memory:
+  enabled: true
+  backend: dynamodb
+
+  scoping:
+    # primary key: composite of client + document
+    # this prevents any cross-client memory leakage
+    partition_key: "client_id"
+    sort_key: "document_id"
+
+  ttl:
+    # memory expires after processing SLA window
+    # in regulated env, we want explicit control over retention
+    default_ttl_hours: 24
+    max_ttl_hours: 168          # 7 days hard cap
+
+  # cross-session memory is disabled in production
+  # use DynamoDB audit log for persistent state instead —
+  # gives full audit control over what's stored and for how long
+  cross_session:
+    enabled: false              # DO NOT enable in regulated environments
+    # enabled: true             # only for dev/staging
+
+  # what gets stored
+  content_policy:
+    store_agent_outputs: true
+    store_tool_results: true
+    store_intermediate_state: false   # too much data, not useful for recall
+    redact_pii: true                  # belt-and-suspenders with VPC routing
+
+  # size limits per session
+  limits:
+    max_entries_per_session: 50
+    max_entry_size_bytes: 65536       # 64KB per entry
+    max_session_size_bytes: 1048576   # 1MB total per session
