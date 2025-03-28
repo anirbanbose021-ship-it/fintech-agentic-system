@@ -1,0 +1,21 @@
+# Core orchestration
+langgraph>=0.2.0
+langchain-core>=0.3.0
+
+# AWS SDK
+boto3>=1.34.0
+botocore>=1.34.0
+
+# LLM client (for vLLM via LiteLLM proxy)
+openai>=1.12.0
+
+# RAG - OpenSearch
+opensearch-py>=2.4.0
+requests-aws4auth>=1.2.0
+
+# Evaluation
+ragas>=0.1.10
+datasets>=2.16.0
+
+# Utilities
+python-dotenv>=1.0.0
