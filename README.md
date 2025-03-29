@@ -27,24 +27,67 @@ Every decision is logged to DynamoDB with a full audit trail suitable for regula
 
 ## Architecture
 
-```
-Document (S3)
-      │
-      ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    LangGraph Orchestration                          │
-│                                                                     │
-│  [Ingestion] → [Classification] ──┬──→ [Risk Agent / vLLM] ──┐    │
-│                                   └──→ [Risk Agent / Bedrock] ─┤    │
-│                                                               ▼    │
-│                                          [Regulatory Cross-Ref]    │
-│                                                               ▼    │
-│                                          [Decision Router]         │
-└─────────────────────────────────────────────────────────────────────┘
-      │                                                         │
-      ▼                                                         ▼
-AWS Bedrock AgentCore Runtime                          DynamoDB Audit Log
-(Memory · Gateway · Observability)
+```mermaid
+flowchart TD
+    subgraph input["📄 Input"]
+        S3["Document (S3)"]
+    end
+
+    subgraph langgraph["LangGraph Orchestration"]
+        direction TB
+        IG["Ingestion Agent<br/><i>PDF parsing · chunking · S3 staging</i>"]
+        CL["Classification Agent<br/><i>KYC │ CREDIT │ REGULATORY │ LEGAL</i>"]
+
+        IG --> CL
+
+        subgraph routing["Conditional Model Backend Routing"]
+            direction LR
+            VLLM["Risk Agent — vLLM<br/><i>Mistral 7B fine-tuned (on-prem)</i><br/><b>KYC · CREDIT</b>"]
+            BDK["Risk Agent — Bedrock<br/><i>Claude 3 Sonnet</i><br/><b>REGULATORY · LEGAL</b>"]
+        end
+
+        CL -- "PII-sensitive docs" --> VLLM
+        CL -- "Non-PII docs" --> BDK
+
+        REG["Regulatory Cross-Ref Agent<br/><i>Hybrid RAG · OpenSearch · Titan Embed v2</i>"]
+        DR["Decision Router Agent<br/><i>Deterministic thresholds + LLM rationale</i>"]
+
+        VLLM --> REG
+        BDK --> REG
+        REG --> DR
+    end
+
+    subgraph infra["AWS Infrastructure"]
+        direction LR
+        AC["Bedrock AgentCore Runtime<br/><i>Memory · Gateway · Observability</i>"]
+        DDB["DynamoDB<br/><i>Audit Trail</i>"]
+        SNS["SNS<br/><i>Alerts</i>"]
+    end
+
+    subgraph eval["Evaluation Gate"]
+        RAGAS["RAGAS Pipeline<br/><i>faithfulness ≥ 0.85 · relevancy ≥ 0.80<br/>precision ≥ 0.75 · recall ≥ 0.80</i>"]
+    end
+
+    subgraph decisions["Routing Decisions"]
+        direction LR
+        AP["✅ AUTO_APPROVE"]
+        HR["⚠️ HUMAN_REVIEW"]
+        RJ["❌ REJECT"]
+    end
+
+    S3 --> IG
+    DR --> decisions
+    DR -- "audit events" --> DDB
+    langgraph -. "runtime" .-> AC
+    DR -. "alerts" .-> SNS
+    eval -. "blocks deploy if<br/>thresholds not met" .-> langgraph
+
+    style langgraph fill:#f0f4ff,stroke:#4a6cf7,stroke-width:2px
+    style routing fill:#fff8e1,stroke:#f9a825,stroke-width:1px
+    style infra fill:#fff3e0,stroke:#ef6c00,stroke-width:1px
+    style eval fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px
+    style decisions fill:#fafafa,stroke:#999,stroke-width:1px
+    style input fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px
 ```
 
 **Model Backend Routing:**
