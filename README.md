@@ -21,7 +21,7 @@ A production-grade, five-agent document intelligence pipeline for financial serv
 4. **Regulatory Cross-Reference Agent** — Flags compliance gaps via hybrid RAG over regulatory corpus
 5. **Decision Router Agent** — Aggregates signals → `AUTO_APPROVE | HUMAN_REVIEW | REJECT`
 
-Every decision is logged to DynamoDB with a full audit trail suitable for regulatory inspection.
+Every decision is dual-audited: **CloudTrail** captures API-level activity (Bedrock calls, S3 access), while **DynamoDB** stores application-level business decisions (risk scores, routing rationale, retrieval sources). This is the AWS-recommended pattern for regulated workloads.
 
 ---
 
@@ -60,7 +60,8 @@ flowchart TD
     subgraph infra["AWS Infrastructure"]
         direction LR
         AC["Bedrock AgentCore Runtime<br/><i>Memory · Gateway · Observability</i>"]
-        DDB["DynamoDB<br/><i>Audit Trail</i>"]
+        CT["CloudTrail<br/><i>API-level audit<br/>Bedrock · S3 · DynamoDB calls</i>"]
+        DDB["DynamoDB<br/><i>Application-level audit<br/>risk scores · routing · rationale</i>"]
         SNS["SNS<br/><i>Alerts</i>"]
     end
 
@@ -77,7 +78,8 @@ flowchart TD
 
     S3 --> IG
     DR --> decisions
-    DR -- "audit events" --> DDB
+    DR -- "business audit" --> DDB
+    langgraph -. "API calls auto-logged" .-> CT
     langgraph -. "runtime" .-> AC
     DR -. "alerts" .-> SNS
     eval -. "blocks deploy if<br/>thresholds not met" .-> langgraph
@@ -110,6 +112,7 @@ flowchart TD
 | Embeddings | Amazon Titan Embed v2 |
 | Evaluation | RAGAS (faithfulness · relevancy · precision · recall) |
 | Storage | S3 · DynamoDB |
+| API audit | AWS CloudTrail (Bedrock data events) |
 | Alerting | Amazon SNS |
 
 ---

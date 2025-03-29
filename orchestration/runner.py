@@ -3,7 +3,7 @@
 Pipeline execution runner with:
 - Human-in-the-loop (HITL) interrupt injection
 - Error classification (4xx client errors vs 5xx/429 retriable)
-- Audit event persistence to DynamoDB
+- Dual audit trail: DynamoDB (application-level) + CloudTrail (API-level)
 """
 
 import json
@@ -26,6 +26,16 @@ RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class PipelineRunner:
+    """
+    Dual audit strategy (AWS recommended for regulated workloads):
+      - CloudTrail: automatically captures all Bedrock InvokeModel / Converse
+        API calls, S3 access, DynamoDB writes — infrastructure-level "who did what"
+      - DynamoDB: application-level business audit — risk scores, routing decisions,
+        agent rationale, retrieval sources — the stuff CloudTrail can't see
+
+    CloudTrail is configured at the account level via terraform (see infrastructure/terraform/main.tf).
+    This runner handles the DynamoDB application audit layer.
+    """
     def __init__(self, dynamodb_table: str = "pipeline-audit-log"):
         self.pipeline = build_pipeline()
         self.dynamodb = boto3.resource("dynamodb")
@@ -101,7 +111,12 @@ class PipelineRunner:
         raise RuntimeError(f"Pipeline failed after {max_retries} retries")
 
     def _persist_audit_trail(self, state: DocumentPipelineState) -> None:
-        """Persist full audit trail to DynamoDB for regulatory compliance."""
+        """
+        Persist application-level audit trail to DynamoDB.
+        This captures business decisions (risk scores, routing, rationale) that
+        CloudTrail doesn't see. CloudTrail handles the infra layer — Bedrock API
+        calls, S3 access, IAM activity — automatically via the account-level trail.
+        """
         try:
             self.table.put_item(Item={
                 "document_id":      state["document_id"],

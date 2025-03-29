@@ -1,9 +1,15 @@
 # infrastructure/terraform/main.tf
 # IaC for the full AWS stack supporting the fintech agentic system
 #
+# Dual audit strategy (AWS recommended for regulated workloads):
+#   - CloudTrail: API-level audit — captures all Bedrock, S3, DynamoDB API calls
+#   - DynamoDB:   Application-level audit — captures business decisions (risk scores,
+#                 routing decisions, agent rationale, retrieval sources)
+#
 # Resources created:
-#   - DynamoDB table for audit logs
-#   - S3 bucket for document storage
+#   - CloudTrail trail for API-level audit logging
+#   - DynamoDB table for application-level audit logs
+#   - S3 buckets for documents + CloudTrail logs
 #   - OpenSearch Serverless collection for regulatory corpus
 #   - SNS topic for deployment alerts
 #   - IAM roles for AgentCore Runtime
@@ -126,6 +132,110 @@ resource "aws_s3_bucket_public_access_block" "documents" {
   restrict_public_buckets = true
 }
 
+# ── CloudTrail: API-Level Audit (AWS recommended) ────────────────────────────
+# Captures all Bedrock InvokeModel/Converse calls, S3 access, DynamoDB writes,
+# IAM activity. This is the infrastructure audit layer — "who called what API, when."
+# The application-level audit (risk scores, routing decisions) lives in DynamoDB.
+
+resource "aws_s3_bucket" "cloudtrail_logs" {
+  bucket = "fintech-agentic-cloudtrail-${var.account_id}"
+}
+
+resource "aws_s3_bucket_policy" "cloudtrail_logs" {
+  bucket = aws_s3_bucket.cloudtrail_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSCloudTrailAclCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        }
+        Action   = "s3:GetBucketAcl"
+        Resource = aws_s3_bucket.cloudtrail_logs.arn
+      },
+      {
+        Sid    = "AWSCloudTrailWrite"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.cloudtrail_logs.arn}/AWSLogs/${var.account_id}/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl" = "bucket-owner-full-control"
+          }
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "cloudtrail_logs" {
+  bucket = aws_s3_bucket.cloudtrail_logs.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "aws:kms"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "cloudtrail_logs" {
+  bucket = aws_s3_bucket.cloudtrail_logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_cloudtrail" "agentic_system" {
+  name                       = "fintech-agentic-trail"
+  s3_bucket_name             = aws_s3_bucket.cloudtrail_logs.id
+  include_global_service_events = true
+  is_multi_region_trail      = false
+  enable_log_file_validation = true    # tamper-proof — required for regulated environments
+
+  # log Bedrock model invocations as data events
+  event_selector {
+    read_write_type           = "All"
+    include_management_events = true
+
+    data_resource {
+      type   = "AWS::BedrockRuntime::Model"
+      values = ["arn:aws:bedrock:${var.aws_region}::foundation-model/*"]
+    }
+  }
+
+  # log S3 data events for the document bucket
+  event_selector {
+    read_write_type           = "All"
+    include_management_events = false
+
+    data_resource {
+      type   = "AWS::S3::Object"
+      values = ["${aws_s3_bucket.documents.arn}/"]
+    }
+  }
+
+  # log DynamoDB data events for the audit table
+  event_selector {
+    read_write_type           = "All"
+    include_management_events = false
+
+    data_resource {
+      type   = "AWS::DynamoDB::Table"
+      values = [aws_dynamodb_table.audit_log.arn]
+    }
+  }
+
+  depends_on = [aws_s3_bucket_policy.cloudtrail_logs]
+}
+
 # ── SNS: Deployment Alerts ───────────────────────────────────────────────────
 
 resource "aws_sns_topic" "deployment_alerts" {
@@ -206,4 +316,12 @@ output "sns_topic_arn" {
 
 output "agentcore_role_arn" {
   value = aws_iam_role.agentcore_runtime.arn
+}
+
+output "cloudtrail_name" {
+  value = aws_cloudtrail.agentic_system.name
+}
+
+output "cloudtrail_bucket" {
+  value = aws_s3_bucket.cloudtrail_logs.id
 }
